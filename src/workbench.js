@@ -1,6 +1,7 @@
 // Local authoring and turn review. The proxy's public Jev route stays independent.
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { verificationPacket } from './verification.js';
 import { DatabaseSync } from 'node:sqlite';
 import { findSessions, findSession, readSession, toEvents } from '../scripts/sim/chatlog.js';
 import { validateGraph, projectGraph, evaluateGraph } from './gate-workflow.js';
@@ -14,7 +15,7 @@ const json = row => row ? JSON.parse(row.value) : null;
 const reply = (res, status, data) => { res.writeHead(status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'}); res.end(JSON.stringify(data)); };
 const fail = (status, message) => Object.assign(Error(message), { status });
 const described = value => typeof value === 'string' ? !!value.trim() : (Array.isArray(value) && value.length > 0) || (obj(value) && Object.keys(value).length > 0);
-const frozenBenchmarks=['guard-benchmark.json','tool-use-benchmark.json'].map(name=>JSON.parse(readFileSync(new URL(`../ui/${name}`,import.meta.url),'utf8')));
+const frozenBenchmarks=['guard-benchmark.json','tool-use-benchmark.json'].flatMap(name=>{const file=new URL(`../ui/${name}`,import.meta.url);return existsSync(file)?[JSON.parse(readFileSync(file,'utf8'))]:[];});
 
 function questionsFrom(source) {
   if (typeof source !== 'string' || !source.trim() || source.length > 50000) throw fail(400, 'Classifier source must be 1–50,000 characters.');
@@ -95,10 +96,11 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
     return run;
   };
   async function runGraph(workflow,value) {
-    const graph=workflow.graph, validated=validateGraph(graph,pinnedQuestion), steps=[], answers={};
-    if(workflowRunner){const run=await workflowRunner(workflow,value,runOne,pinnedQuestion);return saveRun(workflow,value.sessionId,value.turnId,{id:randomUUID(),at:new Date().toISOString(),graphHash:decisionHash(graph),...run});}
+    const graph=workflow.graph, validated=validateGraph(graph,pinnedQuestion), steps=[], answers={}, grouped=new Map();
+    const evaluate=async args=>{const key=args.agentId+':'+args.revisionId;if(!grouped.has(key))grouped.set(key,runOne({...args,claim:value.claim,evidenceLines:value.evidenceLines}));return grouped.get(key);};
+    if(workflowRunner){const run=await workflowRunner(workflow,value,evaluate,pinnedQuestion);return saveRun(workflow,value.sessionId,value.turnId,{id:randomUUID(),at:new Date().toISOString(),graphHash:decisionHash(graph),...run});}
     for(const node of validated.agents){
-      const result=await runOne({sessionId:value.sessionId,turnId:value.turnId,scope:value.scope,agentId:node.agentId,revisionId:node.revisionId});
+      const result=await evaluate({sessionId:value.sessionId,turnId:value.turnId,scope:value.scope,agentId:node.agentId,revisionId:node.revisionId});
       steps.push({nodeId:node.id,agentId:node.agentId,questionId:node.questionId,revisionId:node.revisionId,results:[result]});
       if(result.status!=='ok')return saveRun(workflow,value.sessionId,value.turnId,{id:randomUUID(),complete:false,steps,error:result.error,graphHash:decisionHash(graph)});
       answers[node.id]=result.rawResponse.answers?.[node.questionId];
@@ -155,15 +157,17 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
     }
     return {source:'frozen',labeled:rows.length,paired:gate.total,missing:rows.filter(row=>row.missing).length,uncertain:rows.filter(row=>row.uncertain).length,jointHoldout:rows.filter(row=>row.jointHoldout).length,baseline,gate,rows};
   }
-  async function runOne({ sessionId, turnId, scope = 'turn', agentId, revisionId, priorAnswers }) {
-    if (!['turn','messages'].includes(scope)) throw fail(400, 'Choose messages or the full selected turn.');
+  async function runOne({ sessionId, turnId, scope = 'turn', agentId, revisionId, priorAnswers, claim, evidenceLines }) {
+    if (!['turn','messages','verification'].includes(scope)) throw fail(400, 'Choose messages or the full selected turn.');
     const turn = turnsFor(sessionId, sessionsDir).find(item => item.id === turnId);
     if (!turn || !turn.complete) throw fail(400, 'Select a completed turn.');
     const { revision, questions } = latestRevision(agentId, revisionId);
     const included = turn.events.filter(item => item.kind === 'user' || item.kind === 'assistant' || (scope === 'turn' && ['tool','tool-result'].includes(item.kind)));
-    const state = included.map(item => `${item.kind}${item.name ? ` (${item.name})` : ''}: ${item.text}`).join('\n\n');
-    if (!state || state.length > 32000) throw fail(400, 'Selected turn is empty or too long for Jev.');
-    const body = JSON.stringify({ model: 'jev-latest', state: priorAnswers ? `${state}\n\nPrevious workflow answers (unverified classifications, not ground truth): ${JSON.stringify(priorAnswers)}\nRe-evaluate the selected turn from its source evidence. A prior answer may be wrong; explain disagreement through the evidence.` : state, questions });
+    const packet=scope==='verification'?verificationPacket(turn,{claim,evidenceLines}):null;
+    const state=packet?packet.state:included.map(item => `${item.kind}${item.name ? ` (${item.name})` : ''}: ${item.text}`).join('\n\n');
+    const stateText=typeof state==='string'?state:JSON.stringify(state);
+    if (!stateText || stateText.length > 32000) throw fail(400, 'Selected turn is empty or too long for Jev.');
+    const body = JSON.stringify({ model: 'jev-latest', state: priorAnswers && !packet ? `${state}\n\nPrevious workflow answers (unverified classifications, not ground truth): ${JSON.stringify(priorAnswers)}\nRe-evaluate the selected turn from its source evidence. A prior answer may be wrong; explain disagreement through the evidence.` : state, questions });
     const inputHash = hash(body), at = new Date().toISOString(), started = Date.now();
     const key = getKey(); if (!key) throw fail(401, 'Set a Jev key before running a classifier.');
     let response, raw;
@@ -173,7 +177,7 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
     } catch (error) { throw fail(502, `Jev request failed: ${error.message}`); }
     const elapsedMs = Date.now() - started;
     const callId = store.allocate();
-    const record = { id: randomUUID(), at, sessionId, turnId, agentId, revisionId: revision.id, scope, stateHash: hash(state), inputHash, sourceHash: hash(revision.source), model: 'jev-latest', answeredBy: raw?.model || null, elapsedMs, usage: raw?.usage || null, questions, rawResponse: raw, callId, reviews: {}, status: response.ok && obj(raw?.answers) ? 'ok' : 'error', error: response.ok ? null : `Jev returned HTTP ${response.status}` };
+    const record = { id: randomUUID(), at, sessionId, turnId, agentId, revisionId: revision.id, scope, ...(packet?{verification:packet}:{}), stateHash: hash(stateText), inputHash, sourceHash: hash(revision.source), model: 'jev-latest', answeredBy: raw?.model || null, elapsedMs, usage: raw?.usage || null, questions, rawResponse: raw, callId, reviews: {}, status: response.ok && obj(raw?.answers) ? 'ok' : 'error', error: response.ok ? null : `Jev returned HTTP ${response.status}` };
     db.prepare('INSERT INTO wb_results (id,session_id,turn_id,agent_id,revision_id,value) VALUES (?,?,?,?,?,?)').run(record.id, sessionId, turnId, agentId, revision.id, JSON.stringify(record));
     const requestValue = JSON.parse(body);
     store.save({ summary: { id: callId, at, label: `observer/${agentId}`, trigger: null, key: inputHash, stateKey: hash(JSON.stringify(requestValue.state)), status: response.status, elapsedMs, bytes: Buffer.byteLength(body), model: 'jev-latest', answeredBy: record.answeredBy, inputTokens: raw?.usage?.input_tokens ?? null, cost: raw?.usage?.cost ?? null, questions: Object.entries(questions).map(([id,q]) => ({ id, type: q.type, asks: typeof q.instructions === 'string' ? q.instructions : JSON.stringify(q.instructions), ...(obj(raw?.answers?.[id]) ? raw.answers[id] : {}) })) }, request: requestValue, response: raw });
@@ -194,6 +198,7 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
       const path = url.pathname;
       if (path === '/api/runtime' && req.method === 'GET') return reply(res,200,{workflow:workflowRunner?'langgraph':'builtin',discussion:discussionRunner?'langchain':'builtin',automaticModelRuns:false});
       if (path === '/api/history/sessions' && req.method === 'GET') return reply(res,200,{ sessions: findSessions({dir:sessionsDir,limit:40}).filter(item=>item.id).map(item=>({id:item.id,label:item.id,at:new Date(item.mtime).toISOString()})) });
+      if(path === '/api/verification/pack' && req.method === 'POST'){const value=await body(req),turn=turnsFor(value.sessionId,sessionsDir).find(item=>item.id===value.turnId);if(!turn||!turn.complete)throw fail(400,'Select a completed turn.');return reply(res,200,verificationPacket(turn,value));}
       if (path === '/api/history/turns' && req.method === 'GET') return reply(res,200,{ turns: turnsFor(url.searchParams.get('session'),sessionsDir) });
       if (path === '/api/agents/validate' && req.method === 'POST') return reply(res,200,{ questions: questionsFrom((await body(req)).source) });
       const templateCheck = /^\/api\/agents\/([0-9a-f-]+)\/check$/.exec(path);
@@ -323,11 +328,11 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
       }
       const runsPath=/^\/api\/workflows\/([0-9a-f-]+)\/runs$/.exec(path);
       if(runsPath && req.method==='GET'){
-        const workflow=readWorkflow(runsPath[1]);if(!workflow.graph)throw fail(400,'Run replay requires a gate graph.');
+        const workflow=readWorkflow(runsPath[1]);
         const sessionId=url.searchParams.get('session');if(!sessionId)throw fail(400,'Select a conversation.');
         const rows=db.prepare('SELECT turn_id,value FROM wb_workflow_runs WHERE workflow_id=? AND session_id=? ORDER BY rowid DESC LIMIT 50').all(workflow.id,sessionId);
-        const current=decisionHash(workflow.graph);
-        return reply(res,200,{runs:rows.map(row=>({turnId:row.turn_id,...json(row)})).filter(run=>run.graphHash===current)});
+        const current=workflow.graph?decisionHash(workflow.graph):null;
+        return reply(res,200,{runs:rows.map(row=>({turnId:row.turn_id,...json(row)})).filter(run=>!workflow.graph||run.graphHash===current)});
       }
       if (path === '/api/workflows' && req.method === 'POST') {
         const value = await body(req);
