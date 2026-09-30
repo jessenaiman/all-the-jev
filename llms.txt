@@ -1,10 +1,9 @@
 # Jeview
 
 An unofficial local visualizer for Jev (TypeSafe System One) at http://127.0.0.1:4777, with a live view of every call at http://127.0.0.1:4777/
-It is a gateway, not a model: it sits between a Jev client and TypeSafe and answers nothing itself. Each request it
-receives goes on to Jev with the Jev key set in the viewer, Jev's answer goes back to the caller, and the call is kept
-whole (what was asked, what Jev saw, what it answered) in a SQLite database on this machine. Nothing is stored anywhere
-else: Jeview runs locally, and TypeSafe is the only place it sends anything.
+It is a gateway, not a model. Proxy calls go to the configured System One endpoint and the response returns to the
+caller. Jeview keeps calls, classifier revisions, and reviews in a local SQLite database. Discussion sends selected
+turn evidence to a separate OpenRouter chat model only when someone asks from the viewer; Jev itself does not chat.
 
 The Jev key: not set yet, so calls are refused. Set it in the viewer at http://127.0.0.1:4777/ (the key icon, top right).
 
@@ -50,3 +49,39 @@ What Jev answered or refused is recorded, and so are the 401s and 502s. The 400s
   word, newest first, at most 1,000.
 
 A record's "key" is the sha256 of the exact body sent to Jev.
+
+## Author and run a local classifier
+
+- GET or POST http://127.0.0.1:4777/api/agents: list agents or create one with { name, source }. Source may be Markdown, native
+  JSON, or Markdown with a fenced jev-agent JSON block. Markdown outside the block becomes shared guidance.
+- PUT http://127.0.0.1:4777/api/agents/<id>/revisions with { source }: save the next active revision. Older revisions remain.
+- POST http://127.0.0.1:4777/api/agents/validate with { source }: check the typed Choice, Noul, or Score definition locally.
+- GET http://127.0.0.1:4777/api/history/sessions and GET http://127.0.0.1:4777/api/history/turns?session=<id>: find completed local turns.
+- POST http://127.0.0.1:4777/api/jev/evaluate with { sessionId, turnIds: [oneTurnId], agentId, scope: "turn" }: evaluate one
+  completed turn, including its tool events, through Jev. Use scope "messages" to omit tools.
+- GET http://127.0.0.1:4777/api/jev/results?session=<id>: retrieve pinned source revision, turn hash, response, and reviews.
+- PUT http://127.0.0.1:4777/api/jev/results/<id>/review with { questionId, correct: true|false|null }: mark an answer for review.
+- GET or POST http://127.0.0.1:4777/api/workflows: list or save an ordered workflow, or a graph of pinned agent questions,
+  AND/OR/NOT gates, and one output. A saved graph is one reusable endpoint.
+- POST http://127.0.0.1:4777/api/workflows/project with { graph }: estimate sensitivity, specificity, and accuracy from editable
+  prevalence and per-agent assumptions. This assumes independent agent errors and does not call Jev.
+- POST http://127.0.0.1:4777/api/workflows/<id>/run with { sessionId, turnId, scope: "turn" }: run the saved workflow on one turn.
+  Graph agents each receive that same turn; gates combine their typed answers after Jev responds.
+- PUT http://127.0.0.1:4777/api/workflows/<id>/labels with { sessionId, turnId, positive: true|false|null }: label the true outcome.
+- GET http://127.0.0.1:4777/api/workflows/<id>/metrics?session=<id>: paired baseline and graph confusion counts on labeled turns.
+- POST http://127.0.0.1:4777/api/workflows/<id>/replay with { sessionId, scope: "turn" }: rerun labeled turns through Jev.
+- POST http://127.0.0.1:4777/api/workflows/<id>/rescore with { sessionId }: recompute gate decisions from compatible saved
+  answers without another Jev call. Changed agent revisions or questions need a new Jev run.
+
+## Route a host task to an authored tool and instruction
+
+- POST http://127.0.0.1:4777/api/workflows with { kind: "tool-router", name, minConfidence, routes: [{ id, label, when,
+  toolId, instructionId, instruction, minConfidence? }] }: save a reusable Jev Choice router. The instruction text
+  remains local; Jev sees the route description and available tool description, not the instruction body.
+- GET http://127.0.0.1:4777/api/browser/tools: list actual tools offered by the connected local Browser Harness MCP process.
+- POST http://127.0.0.1:4777/api/workflows/<id>/route with { task, availableTools: [{ id, description }], preview?: true }:
+  compile a request or make one Jev decision. Use { task, toolSource: "browser-harness" } to discover current browser
+  tools before and after the Jev call. The result is an exact handoff or a review hold; Jeview never executes it.
+- GET http://127.0.0.1:4777/api/workflows/<id>/route-runs: latest saved decisions and correctness counts for the current route
+  definition. PUT http://127.0.0.1:4777/api/workflows/<id>/route-runs/<run-id>/feedback with { correct: true|false|null, note? }:
+  review one result. Edit routes and rerun a task to check a fix; old labels do not prove the changed version accurate.

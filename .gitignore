@@ -1,4 +1,7 @@
 node_modules/
+.pnpm-store/
 *.sqlite
 *.sqlite-*
 .DS_Store
+.env
+.impeccable/config.local.json

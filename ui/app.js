@@ -58,6 +58,20 @@
     return "no answer";
   }
   const typeWords = (q) => q.type === "choice" ? `Pick one${q.options ? ` of ${q.options.length} options` : ""}` : q.type === "noul" ? "Yes or no, as a probability" : q.type === "score" ? `A ranking${q.levels ? ` on ${q.levels} levels` : ""}` : "Question";
+  const classificationHelp = {
+    choice: ["Choice", "Select one label from the options you wrote. Jev returns the chosen label and a probability for each option.", "Example: Which outcome fits this turn: followed request, wrong track, or insufficient evidence?"],
+    noul: ["Noul", "A yes/no judgment expressed as the probability of yes. A value near 0.5 means the answer is uncertain.", "Example: Did the assistant use the tool the user explicitly requested?"],
+    score: ["Score", "Place the evidence on an ordered rubric. The result can fall between adjacent levels.", "Example: Rate the risk of a proposed tool call from read-only to destructive."],
+  };
+  const classificationDialog = $("#classification-help");
+  for (const button of document.querySelectorAll("#classification-legend [data-classification]")) button.addEventListener("click", () => {
+    const [title, definition, example] = classificationHelp[button.dataset.classification];
+    $("#classification-title").textContent = title;
+    $("#classification-definition").textContent = definition;
+    $("#classification-example").textContent = example;
+    classificationDialog.showModal();
+  });
+  $("#classification-close").addEventListener("click", () => classificationDialog.close());
   const failed = (record) => record.status !== 200 || !!record.error;
   const hash = (value) => { let x = 2166136261; for (const c of String(value)) x = Math.imul(x ^ c.charCodeAt(0), 16777619); return (x >>> 0) / 4294967296; };
 
@@ -146,6 +160,7 @@
         world.lineages.set(key, { family: family.family, shade: 1 + family.branches++ }); // the family's own colour is the root's
       }
     }
+    kind.type = q.type;
     if (parent) kind.parents.add(parent); // every answer that led here; the first is the one it grows from
     if (q.asks) kind.asks = plainQuestion(q.asks); // the latest wording of this question
     if (!held(kind)) { kind.placed = false; for (const b of [kind, ...kind.options.values()]) b.tx = b.ty = undefined; } // coming back long after it went: a fresh spot
@@ -230,7 +245,9 @@
   /** The free area for the map: clear of the corner, the header and footer, and an open drawer on a wide screen. */
   function layout() {
     const wide = innerWidth > 1100, drawerOpen = document.getElementById("drawer").classList.contains("open") && innerWidth > 900;
-    const area = { l: wide ? 388 : 12, t: 72, r: innerWidth - (drawerOpen ? Math.min(460, innerWidth) : 0) - 16, b: innerHeight - (wide ? 56 : Math.min(innerHeight * 0.38, 320) + 70) };
+    const observer = document.body.classList.contains('observer-active');
+    const inspection = document.body.classList.contains('observer-inspecting');
+    const area = observer ? {l:innerWidth>760?338:12,t:152,r:innerWidth-(inspection&&innerWidth>1100?458:18),b:innerHeight-60} : { l: wide ? 388 : 12, t: 72, r: innerWidth - (drawerOpen ? Math.min(460, innerWidth) : 0) - 16, b: innerHeight - (wide ? 56 : Math.min(innerHeight * 0.38, 320) + 70) };
     const dx = (area.l + area.r) / 2 - world.jev.x, dy = (area.t + area.b) / 2 - world.jev.y;
     world.area = area; world.jev.x += dx; world.jev.y += dy;
     for (const kind of world.kinds.values()) for (const b of [kind, ...kind.options.values()]) { b.x += dx; b.y += dy; if (b.tx !== undefined) { b.tx += dx; b.ty += dy; } } // the map moves as one
@@ -537,7 +554,7 @@
   }
   function readColors() {
     const css = getComputedStyle(document.documentElement), v = (name) => css.getPropertyValue(name).trim();
-    colors = { families: [1, 2, 3, 4, 5, 6].map((i) => SHADES.map((step) => shade(v(`--tree-${i}`), step))), paper: v("--paper"), ink: v("--ink"), muted: v("--muted"), dull: v("--dull"), hairline: v("--hairline"), strong: v("--hairline-strong"), accent: v("--accent"), glow: v("--glow"), red: v("--red"), body: v("--body"), display: v("--display"), aura: v("--aura") };
+    colors = { types: { choice: v("--choice"), noul: v("--noul"), score: v("--score") }, paper: v("--paper"), ink: v("--ink"), muted: v("--muted"), dull: v("--dull"), hairline: v("--hairline"), strong: v("--hairline-strong"), accent: v("--accent"), glow: v("--glow"), red: v("--red"), body: v("--body"), display: v("--display"), aura: v("--aura") };
   }
   function resize() {
     const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -565,16 +582,10 @@
     }
     return paths;
   }
-  /** A tree's tint: the question it grew from wears its colour family, and each branch off it a shade of that family,
-   * shared by everything that grows from the branch. A question nothing has branched from stays in ink, and so does
-   * everything with Colours off. */
+  /** Questions and their answers share the colour of the Jev question type; Layout can turn colours off. */
   function tint(kind) {
     if (!data.colours) return null;
-    if (kind.depth === 0) { const family = world.families.get(kind.key); return family ? colors.families[family.family][0] : null; }
-    let k = kind;
-    while (k.depth > 1) k = k.parent.kind;
-    const lineage = world.lineages.get(k.key);
-    return lineage ? colors.families[lineage.family][lineage.shade % SHADES.length] : null;
+    return colors.types[kind.type] ?? null;
   }
   const heat = (option, now) => option.hot === undefined ? 0 : clamp(1 - (now - option.hot) / COOL_MS, 0, 1);
   /** One frame after another. A frame that fails must not be the last one: the canvas is put back as it was (resizing
@@ -1177,26 +1188,42 @@
 
   // ---------- live ----------
   let drawn = false, fresh = []; // calls read and not yet shown: kept across polls, so a page that failed loses none of the pages before it
+  let observerMode = false, autoUpdates = false, pollTimer = null, polling = false;
+  function schedulePoll(){clearTimeout(pollTimer);pollTimer=null;if(autoUpdates&&!observerMode&&!document.hidden)pollTimer=setTimeout(poll,POLL_MS);}
+  document.addEventListener('observer:results', event => {
+    observerMode = true;clearTimeout(pollTimer);pollTimer=null;
+    data.records = event.detail.records; data.byId = new Map(data.records.map(r=>[r.id,r]));
+    data.full = new Map((event.detail.full||[]).map(r=>[r.summary.id,r]));
+    data.run = null; data.selected = null; data.focus = null; data.older = 0;
+    closeDrawer(); rebuild(); renderCorner(true); canvas.classList.add('ready');
+  });
+  document.addEventListener('observer:archive',()=>{observerMode=false;data.records=[];data.byId.clear();data.full.clear();data.meta=null;data.cursor=0;fresh=[];drawn=false;void poll();});
+  document.addEventListener('observer:auto-updates',event=>{autoUpdates=!!event.detail;clearTimeout(pollTimer);pollTimer=null;if(autoUpdates&&!observerMode)void poll();});
+  document.addEventListener('visibilitychange',()=>{clearTimeout(pollTimer);pollTimer=null;if(!document.hidden&&autoUpdates&&!observerMode)void poll();});
   async function poll() {
+    if(polling||observerMode||document.hidden)return;
+    polling=true;
     try {
       const first = !drawn; // once a page: an empty viewer's first call then flies in like any other
       do { // a long history opens on its latest calls, and comes a page at a time
         const response = await fetch(`/_/api/records?${data.meta === null ? `latest=${WINDOW}` : `since=${data.cursor}`}`);
+        if(observerMode)return;
         if (!response.ok) throw Error(String(response.status));
         const next = await response.json();
+        if(observerMode)return;
         if (data.meta === null) data.older = next.older ?? 0;
         data.meta = next; data.cursor = next.cursor;
         for (const record of next.records) { data.records.push(record); data.byId.set(record.id, record); fresh.push(record); }
       } while (data.meta.more);
-      if (first) { await document.fonts?.ready; readColors(); rebuild(); renderCorner(true); canvas.classList.add("ready"); drawn = true; const wanted = Number(location.hash.slice(1)); if (wanted) { await known([wanted]); if (data.byId.has(wanted)) openCall(wanted); } }
+      if (first) { await document.fonts?.ready; if(observerMode)return; readColors(); rebuild(); renderCorner(true); canvas.classList.add("ready"); drawn = true; const wanted = Number(location.hash.slice(1)); if (wanted) { await known([wanted]); if (data.byId.has(wanted)) openCall(wanted); } }
       else if (fresh.length) { arrive(fresh); pileUp(fresh); renderCorner(); }
       fresh = [];
       about();
       // the first visit in this browser opens on what Jeview is and how to use it
       if (first && !remembered("welcomed", false) && $("#about-panel").hidden && !drawer.classList.contains("open")) { remember("welcomed", true); popover("#about", "#about-panel"); } // not over a call a link opened: next time
-      $("#pulse").className = "pulse on"; $("#pulse").dataset.tip = "Live";
+      $("#pulse").className = "pulse on"; $("#pulse").dataset.tip = autoUpdates ? "Live" : "Snapshot";
     } catch { $("#pulse").className = "pulse"; $("#pulse").dataset.tip = "The proxy is not answering"; }
-    setTimeout(poll, POLL_MS);
+    finally { polling=false;schedulePoll(); }
   }
   readColors();
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readColors);

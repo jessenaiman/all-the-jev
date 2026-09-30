@@ -13,10 +13,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+// @ts-expect-error The local workbench is plain JavaScript, like the viewer it serves.
+import { createWorkbenchApi } from "./workbench.js";
 
 export const JEV_PATH = "/v1/systemone";
-/** TypeSafe's endpoint: where every Jev call goes, with the Jev key. */
-export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+/** The default System One-compatible endpoint for Jev calls. */
+export const JEV_ENDPOINT = "https://openrouter.ai/api/v1/systemone";
 export const JEV_USD_PER_INPUT_TOKEN = 0.042 / 1_000_000; // TypeSafe's rate for Jev; output tokens are free
 export const DATABASE = "jeview.sqlite";
 const BODY_LIMIT = 16 * 1024 * 1024;
@@ -30,7 +32,7 @@ const LOOPBACK = /^(127\.0\.0\.1|\[::1\]|([a-z0-9-]+\.)*localhost)(:\d+)?$/;
 /** A page on another site can POST here without asking first, and the call would go out with the user's key. A browser
  * names the page's site in Origin ("null" for a sandboxed one); a caller that is not a page sends none. */
 const foreign = (origin: string | undefined) => origin !== undefined && !LOOPBACK.test(origin.replace(/^https?:\/\//, ""));
-const UI_TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8" };
+const UI_TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".woff2": "font/woff2" };
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'";
 
 /** One question as listed: its id, what it asks in its own words, what it offered (a choice's options, a score's
@@ -220,10 +222,9 @@ export function llmsText(origin: string, keyed: boolean): string {
   return `# Jeview
 
 An unofficial local visualizer for Jev (TypeSafe System One) at ${origin}, with a live view of every call at ${origin}/
-It is a gateway, not a model: it sits between a Jev client and TypeSafe and answers nothing itself. Each request it
-receives goes on to Jev with the Jev key set in the viewer, Jev's answer goes back to the caller, and the call is kept
-whole (what was asked, what Jev saw, what it answered) in a SQLite database on this machine. Nothing is stored anywhere
-else: Jeview runs locally, and TypeSafe is the only place it sends anything.
+It is a gateway, not a model. Proxy calls go to the configured System One endpoint and the response returns to the
+caller. Jeview keeps calls, classifier revisions, and reviews in a local SQLite database. Discussion sends selected
+turn evidence to a separate OpenRouter chat model only when someone asks from the viewer; Jev itself does not chat.
 
 The Jev key: ${keyed ? "set." : `not set yet, so calls are refused. Set it in the viewer at ${origin}/ (the key icon, top right).`}
 
@@ -269,10 +270,46 @@ What Jev answered or refused is recorded, and so are the 401s and 502s. The 400s
   word, newest first, at most 1,000.
 
 A record's "key" is the sha256 of the exact body sent to Jev.
+
+## Author and run a local classifier
+
+- GET or POST ${origin}/api/agents: list agents or create one with { name, source }. Source may be Markdown, native
+  JSON, or Markdown with a fenced jev-agent JSON block. Markdown outside the block becomes shared guidance.
+- PUT ${origin}/api/agents/<id>/revisions with { source }: save the next active revision. Older revisions remain.
+- POST ${origin}/api/agents/validate with { source }: check the typed Choice, Noul, or Score definition locally.
+- GET ${origin}/api/history/sessions and GET ${origin}/api/history/turns?session=<id>: find completed local turns.
+- POST ${origin}/api/jev/evaluate with { sessionId, turnIds: [oneTurnId], agentId, scope: "turn" }: evaluate one
+  completed turn, including its tool events, through Jev. Use scope "messages" to omit tools.
+- GET ${origin}/api/jev/results?session=<id>: retrieve pinned source revision, turn hash, response, and reviews.
+- PUT ${origin}/api/jev/results/<id>/review with { questionId, correct: true|false|null }: mark an answer for review.
+- GET or POST ${origin}/api/workflows: list or save an ordered workflow, or a graph of pinned agent questions,
+  AND/OR/NOT gates, and one output. A saved graph is one reusable endpoint.
+- POST ${origin}/api/workflows/project with { graph }: estimate sensitivity, specificity, and accuracy from editable
+  prevalence and per-agent assumptions. This assumes independent agent errors and does not call Jev.
+- POST ${origin}/api/workflows/<id>/run with { sessionId, turnId, scope: "turn" }: run the saved workflow on one turn.
+  Graph agents each receive that same turn; gates combine their typed answers after Jev responds.
+- PUT ${origin}/api/workflows/<id>/labels with { sessionId, turnId, positive: true|false|null }: label the true outcome.
+- GET ${origin}/api/workflows/<id>/metrics?session=<id>: paired baseline and graph confusion counts on labeled turns.
+- POST ${origin}/api/workflows/<id>/replay with { sessionId, scope: "turn" }: rerun labeled turns through Jev.
+- POST ${origin}/api/workflows/<id>/rescore with { sessionId }: recompute gate decisions from compatible saved
+  answers without another Jev call. Changed agent revisions or questions need a new Jev run.
+
+## Route a host task to an authored tool and instruction
+
+- POST ${origin}/api/workflows with { kind: "tool-router", name, minConfidence, routes: [{ id, label, when,
+  toolId, instructionId, instruction, minConfidence? }] }: save a reusable Jev Choice router. The instruction text
+  remains local; Jev sees the route description and available tool description, not the instruction body.
+- GET ${origin}/api/browser/tools: list actual tools offered by the connected local Browser Harness MCP process.
+- POST ${origin}/api/workflows/<id>/route with { task, availableTools: [{ id, description }], preview?: true }:
+  compile a request or make one Jev decision. Use { task, toolSource: "browser-harness" } to discover current browser
+  tools before and after the Jev call. The result is an exact handoff or a review hold; Jeview never executes it.
+- GET ${origin}/api/workflows/<id>/route-runs: latest saved decisions and correctness counts for the current route
+  definition. PUT ${origin}/api/workflows/<id>/route-runs/<run-id>/feedback with { correct: true|false|null, note? }:
+  review one result. Edit routes and rerun a task to check a fix; old labels do not prove the changed version accurate.
 `;
 }
 
-export type JeviewOptions = { dir: string; jevEndpoint?: string; port?: number; fetch?: typeof fetch; ui?: string | URL };
+export type JeviewOptions = { dir: string; jevEndpoint?: string; port?: number; fetch?: typeof fetch; ui?: string | URL; envKey?: string; chatKey?: string; chatModel?: string; sessionsDir?: string; workflowRunner?: (...args: any[]) => Promise<any>; discussionRunner?: (...args: any[]) => Promise<any>; browserHarness?: {status:()=>Promise<any>;call:(name:string,args?:object)=>Promise<any>;listTools?:()=>Promise<{id:string;description:string}[]>;close:()=>void} };
 export type Jeview = { server: Server; store: JeviewStore };
 
 export function createJeview(options: JeviewOptions): Jeview {
@@ -281,7 +318,8 @@ export function createJeview(options: JeviewOptions): Jeview {
   if (options.port !== undefined && LOOPBACK.test(endpoint.hostname) && Number(endpoint.port || 80) === options.port) throw Error(`jeview: the Jev endpoint ${endpoint.origin} is this proxy`);
   const jevEndpoint = endpoint.href, request = options.fetch ?? fetch, store = new JeviewStore(options.dir);
   const ui = resolve(fileURLToPath(options.ui ?? new URL("../ui/", import.meta.url)));
-  const jevKey = () => store.setting("jevKey");
+  const jevKey = () => store.setting("jevKey") ?? options.envKey;
+  const workbench = createWorkbenchApi({ database: store.database, endpoint: jevEndpoint, upstreamFetch: request, getKey: jevKey, chatKey: options.chatKey, chatModel: options.chatModel, store, sessionsDir: options.sessionsDir, workflowRunner: options.workflowRunner, discussionRunner: options.discussionRunner, browserHarness: options.browserHarness });
 
   /** One Jev call: to Jev with the Jev key, back to the caller with an event id per answer, and into the database. */
   async function ask(req: IncomingMessage, res: ServerResponse, label: string) {
@@ -323,6 +361,7 @@ export function createJeview(options: JeviewOptions): Jeview {
       // Host allowlist against DNS rebinding: a page on another site must not read the records through a local name.
       if (!LOOPBACK.test(req.headers.host ?? "")) return send(res, 403, { error: "Host not allowed" });
       const url = new URL(req.url ?? "/", "http://proxy");
+      if (url.pathname.startsWith("/api/")) return workbench.handle(req, res, url);
       // a Jev request: POST .../v1/systemone; whatever comes before names the run
       if (url.pathname.endsWith(JEV_PATH) && !url.pathname.startsWith("/_/")) {
         if (req.method !== "POST") return send(res, 405, { error: "Jev requests are POSTed" });
@@ -344,7 +383,7 @@ export function createJeview(options: JeviewOptions): Jeview {
         res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
         return void res.end(llmsText(`http://${req.headers.host}`, !!jevKey()));
       }
-      const file = url.pathname === "/" ? "index.html" : /^\/_\/ui\/([a-z-]+\.(?:css|js))$/.exec(url.pathname)?.[1];
+      const file = url.pathname === "/" ? "index.html" : ["/_/ui/guard-benchmark.json", "/_/ui/tool-use-benchmark.json", "/_/ui/review-board.json"].includes(url.pathname) ? url.pathname.slice(6) : /^\/_\/ui\/((?:vendor\/)?[a-z-]+(?:\.min)?\.(?:css|js)|vendor\/[a-z-]+\.woff2|vendor\/icons\/[a-z-]+\.svg)$/.exec(url.pathname)?.[1];
       if (file) {
         let content: Buffer;
         try { content = readFileSync(join(ui, file)); } catch { return send(res, 404, { error: "Not found" }); }
@@ -364,6 +403,6 @@ export function createJeview(options: JeviewOptions): Jeview {
       return send(res, 404, { error: "Not found" });
     })().catch((error: unknown) => { if (!res.headersSent) send(res, 500, { error: (error as Error).message }); else res.destroy(); });
   });
-  server.on("close", () => store.close());
+  server.on("close", () => { workbench.close(); store.close(); });
   return { server, store };
 }

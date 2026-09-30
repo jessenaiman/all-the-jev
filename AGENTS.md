@@ -24,6 +24,15 @@ npm test
 Tests never call TypeSafe. The demos do: every call is real and costs money, so do not run them in CI or leave them
 running. They play only while a page is open.
 
+## Browser Harness workflow review
+
+When planning, changing, testing, or reporting on Browser Harness or a Jev route that uses its tools, show the user at
+least one Mermaid flowchart of the current workflow. Name the actual source files and functions, agent or model,
+packages and launch command, local routes and external URLs, and who executes each step. Include the connection
+check, Jev's decision, the local hold or handoff, and unfinished host execution. Link the code and package docs beside
+the chart. Keep [the workflow diagram](docs/browser-harness-workflow.md) aligned with verified behavior; label defaults,
+failed connections, and unimplemented steps plainly.
+
 ## Rules of the house
 
 - **No dependencies at run time.** Node 24 and its standard library are all Jeview needs. Keep it so.

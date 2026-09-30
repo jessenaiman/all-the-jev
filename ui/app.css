@@ -6,6 +6,7 @@
   --paper: #f6f6f6; --panel: #fbfbfa; --ink: #1d1d1d; --muted: #4a4a4a; --dull: #686868;
   --hairline: rgb(29 29 29 / 14%); --hairline-strong: rgb(29 29 29 / 26%); --wash: rgb(29 29 29 / 5%);
   --accent: #ff5c00; --accent-deep: #cc4a00; --red: #b9342b; --red-wash: #f8e9e6;
+  --choice: #438cf2; --noul: #27b58e; --score: #c493ed;
   --glow: rgb(255 92 0 / 22%); --aura: rgb(29 29 29 / 7%); --shadow: 0 18px 50px -24px rgb(29 29 29 / 35%);
   --display: ui-serif, "New York", "Iowan Old Style", Georgia, serif; --body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -17,6 +18,7 @@
     --paper: #111111; --panel: #171717; --ink: #ededeb; --muted: #b4b4b0; --dull: #8c8c88;
     --hairline: rgb(237 237 235 / 11%); --hairline-strong: rgb(237 237 235 / 24%); --wash: rgb(237 237 235 / 6%);
     --red: #ff8a7a; --red-wash: #3a1f1b;
+    --choice: #66a7ff; --noul: #46d4a9; --score: #cca3f3;
     --glow: rgb(255 92 0 / 30%); --aura: rgb(237 237 235 / 9%); --shadow: 0 18px 50px -20px rgb(0 0 0 / 70%);
     color-scheme: dark;
   }
@@ -26,6 +28,7 @@
   --paper: #111111; --panel: #171717; --ink: #ededeb; --muted: #b4b4b0; --dull: #8c8c88;
   --hairline: rgb(237 237 235 / 11%); --hairline-strong: rgb(237 237 235 / 24%); --wash: rgb(237 237 235 / 6%);
   --red: #ff8a7a; --red-wash: #3a1f1b;
+  --choice: #66a7ff; --noul: #46d4a9; --score: #cca3f3;
   --glow: rgb(255 92 0 / 30%); --aura: rgb(237 237 235 / 9%); --shadow: 0 18px 50px -20px rgb(0 0 0 / 70%);
   color-scheme: dark;
 }
@@ -49,6 +52,22 @@ code { font-family: var(--mono); font-size: .86em; background: var(--wash); bord
 .bar > *, .foot > * { pointer-events: auto; }
 .bar { top: 0; justify-content: space-between; z-index: 4; } /* above the corner, so the run menu opens over it */
 .foot { bottom: 0; }
+.classification-legend { position: fixed; left: 350px; bottom: 20px; z-index: 14; display: flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--hairline-strong); border-radius: 12px; background: color-mix(in srgb, var(--panel) 95%, transparent); box-shadow: var(--shadow); font-size: 12px; }
+.classification-legend strong { margin-right: 4px; font-size: 11px; color: var(--muted); }
+.classification-legend button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--hairline-strong); border-radius: 999px; background: var(--paper); padding: 4px 8px; font-size: 12px; }
+.classification-legend button:hover, .classification-legend button:focus-visible { border-color: var(--ink); }
+.classification-legend i { width: 8px; height: 8px; border-radius: 50%; background: var(--choice); }
+.classification-legend [data-classification="noul"] i { background: var(--noul); }
+.classification-legend [data-classification="score"] i { background: var(--score); }
+.classification-legend > span { color: var(--muted); }
+body.observer-workflows .classification-legend { display: none; }
+.classification-help { width: min(420px, calc(100vw - 32px)); border: 1px solid var(--hairline-strong); border-radius: 16px; padding: 24px; background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+.classification-help::backdrop { background: rgb(0 0 0 / 60%); }
+.classification-help h2 { font: 300 27px/1.1 var(--display); margin: 0 0 16px; }
+.classification-help p { margin: 0 0 12px; }
+.classification-help p:last-child { color: var(--muted); margin-bottom: 0; }
+#classification-close { float: right; border: 0; background: none; font-size: 26px; line-height: 1; }
+@media (max-width: 800px) { .classification-legend { left: 12px; right: 12px; bottom: 10px; flex-wrap: wrap; justify-content: center; } .classification-legend > span { display: none; } }
 .brand { display: flex; align-items: center; gap: 10px; }
 .title { font-family: var(--display); font-weight: 300; font-size: 26px; letter-spacing: -.02em; }
 .pulse { width: 16px; height: 16px; border-radius: 50%; background: var(--dull); } /* the mark: one orange dot, breathing while live */

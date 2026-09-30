@@ -3,10 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jeview</title>
+<title>all-the-jev</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23ff5c00'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/_/ui/app.css">
 <script src="/_/ui/app.js" defer></script>
+<link rel="stylesheet" href="/_/ui/jev-reference.css">
+<script src="/_/ui/jev-reference.js" defer></script>
+<link rel="stylesheet" href="/_/ui/vendor/bootstrap-grid.min.css">
+<link rel="stylesheet" href="/_/ui/vendor/workbench.css">
+<link rel="stylesheet" href="/_/ui/workbench.css">
+<link rel="stylesheet" href="/_/ui/tool-routing.css">
+<script src="/_/ui/vendor/workbench.js" defer></script>
+<script src="/_/ui/gate-workshop.js" defer></script>
+<script src="/_/ui/vendor/workflow-icons.js" defer></script>
+<script src="/_/ui/tool-routing-workshop.js" defer></script>
+<script src="/_/ui/workbench.js" defer></script>
+<link rel="stylesheet" href="/_/ui/workflow-studio.css">
 </head>
 <body>
 <canvas id="map" aria-label="Live map of Jev calls: Jev in the centre, the questions it is asked around it, and the answers it gave around each question"></canvas>
@@ -14,7 +26,7 @@
 <header class="bar">
   <div class="brand">
     <span id="pulse" class="pulse" data-tip="Connecting"></span>
-    <span class="title">Jeview</span>
+    <span class="title">all-the-jev</span>
     <div class="runs" id="runs" hidden>
       <button id="run-button" class="run-button" aria-haspopup="listbox" aria-expanded="false"><span id="run-name">All runs</span><svg viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <div id="run-menu" class="run-menu" role="listbox" aria-label="Runs" hidden></div>
@@ -32,18 +44,19 @@
 </header>
 
 <div id="about-panel" class="popover" hidden>
-  <p class="eyebrow">What Jeview is</p>
-  <p class="quiet">A visualizer for Jev that sits between your code and TypeSafe. Your requests come here instead of going to TypeSafe; Jeview sends each one on with your key, hands Jev's answer back, and keeps a copy to show you. It answers nothing itself.</p>
+  <p class="eyebrow">What all-the-jev is</p>
+  <p><a href="#jev-reference">About Jev: question types and request format</a></p>
+  <p class="quiet">A visualizer for Jev that sits between your code and TypeSafe. Your requests come here instead of going to TypeSafe; all-the-jev sends each one on with your key, hands Jev's answer back, and keeps a copy to show you. It answers nothing itself.</p>
   <p class="eyebrow">Send Jev requests here</p>
   <p class="line"><code id="run-line">http://127.0.0.1:4777/v1/systemone</code><button class="ghost small" data-copy="run-line">Copy</button></p>
   <p class="quiet">The same requests and answers as TypeSafe's address, with no key needed. To group requests under a project or label, add it to the path: <code>/&lt;label&gt;/v1/systemone</code>.</p>
   <p class="eyebrow">Link a call to the answer that led to it</p>
-  <p class="quiet">Each answer comes back with an event id in <code>events</code>. Send it with a later call in a <code>Jeview-Trigger</code> header and the map grows that call off the answer. Jeview drops the header before calling Jev.</p>
+  <p class="quiet">Each answer comes back with an event id in <code>events</code>. Send it with a later call in a <code>all-the-jev-Trigger</code> header and the map grows that call off the answer. all-the-jev drops the header before calling Jev.</p>
   <p class="eyebrow">Show names, not keys</p>
-  <p class="quiet">Answers are labelled with their option's key. When the criteria behind the keys are objects, send <code>Jeview-Display: name</code> and the map shows that part of each option instead; an option without it keeps its key.</p>
+  <p class="quiet">Answers are labelled with their option's key. When the criteria behind the keys are objects, send <code>all-the-jev-Display: name</code> and the map shows that part of each option instead; an option without it keeps its key.</p>
   <p class="eyebrow">Where calls are kept</p>
   <p class="quiet" id="about-facts"></p>
-  <p class="quiet">Nothing is stored anywhere else. Jeview runs on your computer, has no accounts and no tracking, and sends your requests to TypeSafe only.</p>
+  <p class="quiet">all-the-jev stores calls, agent revisions, and reviews locally. Jev evaluations go to the configured System One endpoint; discussion sends selected evidence to OpenRouter only when you ask.</p>
   <p class="quiet">For agents and scripts: <a href="/llms.txt" target="_blank" rel="noopener">llms.txt</a> explains how to connect.</p>
 </div>
 
@@ -65,6 +78,19 @@
 </div>
 
 <section id="corner" class="corner" aria-label="Recent calls and question stats"></section>
+<aside id="classification-legend" class="classification-legend" aria-label="Jev classification legend">
+  <strong>Jev question types</strong>
+  <button type="button" data-classification="choice"><i aria-hidden="true"></i>Choice</button>
+  <button type="button" data-classification="noul"><i aria-hidden="true"></i>Noul</button>
+  <button type="button" data-classification="score"><i aria-hidden="true"></i>Score</button>
+  <span>Click a type for an example</span>
+</aside>
+<dialog id="classification-help" class="classification-help" aria-labelledby="classification-title">
+  <button type="button" id="classification-close" aria-label="Close classification details">×</button>
+  <h2 id="classification-title"></h2>
+  <p id="classification-definition"></p>
+  <p id="classification-example"></p>
+</dialog>
 
 <div id="layout-panel" class="popover layout-menu" hidden>
   <p class="eyebrow">Layout</p>
@@ -77,7 +103,7 @@
     <span class="switch" aria-hidden="true"></span>
   </button>
   <button id="colours" class="switch-row" type="button" role="switch" aria-checked="true">
-    <span class="words"><b>Colours</b><span class="note">Each tree in its own colour; branches off the same question are shades of it.</span></span>
+    <span class="words"><b>Classification colours</b><span class="note">Choice, Noul and Score each have a consistent colour on the map.</span></span>
     <span class="switch" aria-hidden="true"></span>
   </button>
   <button id="autozoom" class="switch-row" type="button" role="switch" aria-checked="true">
@@ -117,5 +143,7 @@
   <div id="drawer-body"></div>
 </aside>
 <div id="tip" class="tip" role="tooltip" hidden></div>
+<dialog id="jev-reference-dialog"><form method="dialog"><button aria-label="Close About Jev">Close</button></form><article id="reference"></article></dialog>
 </body>
 </html>
+

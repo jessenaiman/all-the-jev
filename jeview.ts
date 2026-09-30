@@ -7,10 +7,14 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { createJeview } from "./src/jeview.ts";
 
+try { process.loadEnvFile(new URL(".env", import.meta.url)); } catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+}
+
 const { values } = parseArgs({ options: { port: { type: "string", default: "4777" }, dir: { type: "string", default: join(homedir(), ".local/share/jeview") }, "jev-endpoint": { type: "string" } } });
 const port = Number(values.port);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error("Usage: node jeview.ts [--port 4777] [--dir ~/.local/share/jeview] [--jev-endpoint URL]");
-const { server, store } = createJeview({ dir: values.dir, port, ...(values["jev-endpoint"] ? { jevEndpoint: values["jev-endpoint"] } : {}) });
+const { server, store } = createJeview({ dir: values.dir, port, envKey: process.env.OPENROUTER_API_KEY, chatKey: process.env.OPENROUTER_API_KEY, chatModel: process.env.OPENROUTER_CHAT_MODEL, ...(values["jev-endpoint"] ? { jevEndpoint: values["jev-endpoint"] } : {}) });
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { server.close(); process.exit(0); });
 // a port that is taken, most often by a Jeview already running, is said in a sentence
 server.on("error", (error: NodeJS.ErrnoException) => { console.error(error.code === "EADDRINUSE" ? `Port ${port} is already in use. If Jeview is already running, open http://127.0.0.1:${port}/; otherwise start this one on another port: --port ${port + 1}` : `Jeview could not start: ${error.message}`); process.exit(1); });
