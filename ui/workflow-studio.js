@@ -28,7 +28,7 @@
       const pass=issues?!output:!!output;return {tone:pass?'green':'red',label:pass?'Pass':'Issue detected',glyph:'●'};
     }
     const badge=()=>{const s=light(),el=h('span',s.glyph+' '+s.label,'studio-verdict '+s.tone);el.setAttribute('role','status');return el;};
-    async function load(){const key=w().id+'|'+ctx.session()+'|'+ctx.turn()?.id;if(key===loadedKey)return;loadedKey=key;packet=null;active=null;claim='';step=0;clearInterval(timer);timer=null;
+    async function load(){if(!ctx.session())return;const key=w().id+'|'+ctx.session()+'|'+ctx.turn()?.id;if(key===loadedKey)return;loadedKey=key;packet=null;active=null;claim='';step=0;clearInterval(timer);timer=null;
       try{if(w().id){runs=(await api(`/api/workflows/${w().id}/runs?session=${encodeURIComponent(ctx.session())}`)).runs;active=runs.find(run=>run.turnId===ctx.turn()?.id)||null;}
         if(verify()&&ctx.turn()){const prior=result()?.verification;packet=prior||await api('/api/verification/pack',{sessionId:ctx.session(),turnId:ctx.turn().id});claim=packet.state.claim;}
         if(ctx.workflow()?.id+'|'+ctx.session()+'|'+ctx.turn()?.id===key)render();
