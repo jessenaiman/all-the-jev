@@ -12,7 +12,7 @@
         const result=await api('/api/browser/jev',{command,workflowId:workflow.id,sessionId:ctx.session(),...args});
         if(command==='tabs'){tabs=result.tabs;if(!tabs.some(t=>t.targetId===target))target=tabs.find(t=>/^http:\/\/(127\.0\.0\.1|localhost):4781\//.test(t.url))?.targetId||tabs[0]?.targetId||'';}
         else state={...result,lastStep:command};
-      }catch(cause){error=cause.message;if(command==='choose'||command==='execute')state={...state,decision:null};}
+      }catch(cause){error=cause.message;if(state&&command!=='tabs')state={...state,request:null,decision:null,lastStep:'failed'};}
       finally{busy=false;ctx.render();}
     }
     function render(body){
@@ -21,7 +21,7 @@
       const current=JSON.stringify(ctx.workflow()?.inference||{});if(current!==settings){settings=current;if(state)state={...state,request:null,decision:null,lastStep:'observe'};}
       body.classList.add('studio-browser-body');
       const head=h('div',undefined,'studio-browser-heading');head.append(h('h3','Jev · Browser Harness'),h('small','Existing Chrome tab · recordings off'));body.append(head);
-      const phase=state?.lastStep==='execute'?'Action executed · fresh observation returned':state?.decision?'Jev chose · waiting for your execution':state?.request?'Request preview · no API call':state?.page?'Browser observed':'Not connected';
+      const phase=state?.lastStep==='failed'?'Step failed · inspect the error and traffic':state?.lastStep==='execute'?'Action executed · fresh observation returned':state?.decision?'Jev chose · waiting for your execution':state?.request?'Request preview · no API call':state?.page?'Browser observed':'Not connected';
       const light=h('p',phase,'studio-browser-phase');light.setAttribute('role','status');body.append(light);
       const todo=h('ol',undefined,'studio-browser-todo');
       for(const [title,done] of [['Observe selected Chrome tab',!!state?.page],['Preview state + typed questions',!!state?.request||state?.lastStep==='execute'],['Jev chooses operation + target',!!state?.decision||state?.lastStep==='execute'],['Execute the selected action once',state?.lastStep==='execute'],['Read the post-action observation',state?.lastStep==='execute']])todo.append(h('li',(done?'✓ ':'○ ')+title));
