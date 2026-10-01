@@ -1,0 +1,227 @@
+{
+  "id": "dc9d3b8f-8328-4369-ad32-e56f22865861",
+  "name": "Live site repair · UI requirements",
+  "graph": {
+    "reviewKind": "ui-requirements",
+    "prevalence": 0.2,
+    "outputId": "out",
+    "nodes": [
+      {
+        "id": "shadcn",
+        "label": "shadcn/ui controls",
+        "kind": "agent",
+        "agentId": "7490c68a-86b7-4b4d-bdb3-a8c9caee3e66",
+        "revisionId": 1,
+        "questionId": "shadcn",
+        "predicate": {
+          "type": "choice",
+          "option": "pass",
+          "abstainOptions": [
+            "insufficient_evidence"
+          ]
+        },
+        "assumption": {
+          "sensitivity": 0.8,
+          "specificity": 0.9
+        }
+      },
+      {
+        "id": "bootstrap",
+        "label": "Bootstrap layout",
+        "kind": "agent",
+        "agentId": "7490c68a-86b7-4b4d-bdb3-a8c9caee3e66",
+        "revisionId": 1,
+        "questionId": "bootstrap",
+        "predicate": {
+          "type": "choice",
+          "option": "pass",
+          "abstainOptions": [
+            "insufficient_evidence"
+          ]
+        },
+        "assumption": {
+          "sensitivity": 0.8,
+          "specificity": 0.9
+        }
+      },
+      {
+        "id": "archify",
+        "label": "Archify visual workflow",
+        "kind": "agent",
+        "agentId": "7490c68a-86b7-4b4d-bdb3-a8c9caee3e66",
+        "revisionId": 1,
+        "questionId": "archify",
+        "predicate": {
+          "type": "choice",
+          "option": "pass",
+          "abstainOptions": [
+            "insufficient_evidence"
+          ]
+        },
+        "assumption": {
+          "sensitivity": 0.8,
+          "specificity": 0.9
+        }
+      },
+      {
+        "id": "rich_text",
+        "label": "Rich text + JSON editor",
+        "kind": "agent",
+        "agentId": "7490c68a-86b7-4b4d-bdb3-a8c9caee3e66",
+        "revisionId": 1,
+        "questionId": "rich_text",
+        "predicate": {
+          "type": "choice",
+          "option": "pass",
+          "abstainOptions": [
+            "insufficient_evidence"
+          ]
+        },
+        "assumption": {
+          "sensitivity": 0.8,
+          "specificity": 0.9
+        }
+      },
+      {
+        "id": "magicui",
+        "label": "Magic UI feedback",
+        "kind": "agent",
+        "agentId": "7490c68a-86b7-4b4d-bdb3-a8c9caee3e66",
+        "revisionId": 1,
+        "questionId": "magicui",
+        "predicate": {
+          "type": "choice",
+          "option": "pass",
+          "abstainOptions": [
+            "insufficient_evidence"
+          ]
+        },
+        "assumption": {
+          "sensitivity": 0.8,
+          "specificity": 0.9
+        }
+      },
+      {
+        "id": "motion",
+        "label": "Motion tied to events",
+        "kind": "agent",
+        "agentId": "7490c68a-86b7-4b4d-bdb3-a8c9caee3e66",
+        "revisionId": 1,
+        "questionId": "motion",
+        "predicate": {
+          "type": "choice",
+          "option": "pass",
+          "abstainOptions": [
+            "insufficient_evidence"
+          ]
+        },
+        "assumption": {
+          "sensitivity": 0.8,
+          "specificity": 0.9
+        }
+      },
+      {
+        "id": "drive_workflow",
+        "label": "You can drive the workflow",
+        "kind": "agent",
+        "agentId": "7490c68a-86b7-4b4d-bdb3-a8c9caee3e66",
+        "revisionId": 1,
+        "questionId": "drive_workflow",
+        "predicate": {
+          "type": "choice",
+          "option": "pass",
+          "abstainOptions": [
+            "insufficient_evidence"
+          ]
+        },
+        "assumption": {
+          "sensitivity": 0.8,
+          "specificity": 0.9
+        }
+      },
+      {
+        "id": "all",
+        "kind": "gate",
+        "op": "and",
+        "label": "Every requirement verified"
+      },
+      {
+        "id": "out",
+        "kind": "output",
+        "label": "Repair or your review"
+      }
+    ],
+    "edges": [
+      {
+        "source": "shadcn",
+        "target": "all"
+      },
+      {
+        "source": "bootstrap",
+        "target": "all"
+      },
+      {
+        "source": "archify",
+        "target": "all"
+      },
+      {
+        "source": "rich_text",
+        "target": "all"
+      },
+      {
+        "source": "magicui",
+        "target": "all"
+      },
+      {
+        "source": "motion",
+        "target": "all"
+      },
+      {
+        "source": "drive_workflow",
+        "target": "all"
+      },
+      {
+        "source": "all",
+        "target": "out"
+      }
+    ]
+  },
+  "positions": {
+    "shadcn": {
+      "x": 35,
+      "y": 35
+    },
+    "bootstrap": {
+      "x": 330,
+      "y": 35
+    },
+    "archify": {
+      "x": 625,
+      "y": 35
+    },
+    "rich_text": {
+      "x": 35,
+      "y": 230
+    },
+    "magicui": {
+      "x": 330,
+      "y": 230
+    },
+    "motion": {
+      "x": 625,
+      "y": 230
+    },
+    "drive_workflow": {
+      "x": 35,
+      "y": 425
+    },
+    "all": {
+      "x": 330,
+      "y": 425
+    },
+    "out": {
+      "x": 625,
+      "y": 425
+    }
+  }
+}

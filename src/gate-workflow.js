@@ -105,9 +105,9 @@ export function projectGraph(graph,resolveQuestion) {
 export function evaluateGraph(graph,answers,resolveQuestion) {
   const valid=validateGraph(graph,resolveQuestion),bits={},trace={};
   for(const node of valid.agents){
-    const answer=answers?.[node.id],value=answerValue(node,answer);
+    const answer=answers?.[node.id],value=node.enabled===false?null:answerValue(node,answer);
     bits[node.id]=value;
-    trace[node.id]={kind:'agent',value,questionId:node.questionId,answer};
+    trace[node.id]={kind:'agent',value,questionId:node.questionId,answer,...(node.enabled===false?{disabled:true}: {})};
   }
   const values=resolve(valid,bits);
   for(const id of valid.order)if(!trace[id])trace[id]={kind:valid.byId.get(id).kind,value:values[id],inputs:valid.incoming.get(id)};

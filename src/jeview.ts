@@ -7,7 +7,7 @@
 // that follows from one of those answers says so in a header, `Jeview-Trigger: <event id>`, so the viewer can grow
 // that question as a branch off the answer that led to it. Jeview's own headers are dropped before Jev, and the body
 // and path are Jev's own contract, untouched: Jev gets the body byte for byte.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve } from "node:path";
@@ -316,7 +316,16 @@ export function createJeview(options: JeviewOptions): Jeview {
   const endpoint = new URL(options.jevEndpoint ?? JEV_ENDPOINT);
   if (endpoint.protocol !== "https:" && endpoint.protocol !== "http:") throw Error(`jeview: the Jev endpoint must be an http(s) URL, not ${endpoint.protocol}`);
   if (options.port !== undefined && LOOPBACK.test(endpoint.hostname) && Number(endpoint.port || 80) === options.port) throw Error(`jeview: the Jev endpoint ${endpoint.origin} is this proxy`);
-  const jevEndpoint = endpoint.href, request = options.fetch ?? fetch, store = new JeviewStore(options.dir);
+  const jevEndpoint = endpoint.href, transport = options.fetch ?? fetch, store = new JeviewStore(options.dir);
+  const request: typeof fetch = async (input,init) => {
+    if(store.setting('outboundEnabled')==='false')throw Error('Outbound API requests are paused in Workflows.');
+    const target=String(input),parsed=typeof init?.body==='string'?parse(init.body):init?.body instanceof Uint8Array?parse(Buffer.from(init.body).toString('utf8')):null;
+    const entry={id:randomUUID(),at:new Date().toISOString(),destination:new URL(target).origin+new URL(target).pathname,model:object(parsed)?parsed.model:null,questions:object(parsed)&&object(parsed.questions)?Object.keys(parsed.questions):[],bytes:typeof init?.body==='string'?Buffer.byteLength(init.body):init?.body instanceof Uint8Array?init.body.byteLength:null,status:'sending' as string};
+    const events=JSON.parse(store.setting('trafficEvents')||'[]');events.push(entry);if(events.length>50)events.shift();
+    const persist=()=>{const current=JSON.parse(store.setting('trafficEvents')||'[]');const index=current.findIndex((e: any)=>e.id===entry.id);if(index>=0)current[index]=entry;store.setSetting('trafficEvents',JSON.stringify(current));};
+    store.setSetting('trafficEvents',JSON.stringify(events));
+    try{const response=await transport(input,init);entry.status='HTTP '+response.status;persist();return response;}catch(error){entry.status='network error';persist();throw error;}
+  };
   const ui = resolve(fileURLToPath(options.ui ?? new URL("../ui/", import.meta.url)));
   const jevKey = () => store.setting("jevKey") ?? options.envKey;
   const workbench = createWorkbenchApi({ database: store.database, endpoint: jevEndpoint, upstreamFetch: request, getKey: jevKey, chatKey: options.chatKey, chatModel: options.chatModel, store, sessionsDir: options.sessionsDir, workflowRunner: options.workflowRunner, discussionRunner: options.discussionRunner, browserHarness: options.browserHarness });

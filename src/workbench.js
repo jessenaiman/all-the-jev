@@ -2,6 +2,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { verificationPacket } from './verification.js';
+import { skillAuditPacket } from './skill-review.js';
+import { requirementsPacket } from './ui-requirements.js';
 import { DatabaseSync } from 'node:sqlite';
 import { findSessions, findSession, readSession, toEvents } from '../scripts/sim/chatlog.js';
 import { validateGraph, projectGraph, evaluateGraph } from './gate-workflow.js';
@@ -97,10 +99,13 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
   };
   async function runGraph(workflow,value) {
     const graph=workflow.graph, validated=validateGraph(graph,pinnedQuestion), steps=[], answers={}, grouped=new Map();
-    const evaluate=async args=>{const key=args.agentId+':'+args.revisionId;if(!grouped.has(key))grouped.set(key,runOne({...args,claim:value.claim,evidenceLines:value.evidenceLines}));return grouped.get(key);};
-    if(workflowRunner){const run=await workflowRunner(workflow,value,evaluate,pinnedQuestion);return saveRun(workflow,value.sessionId,value.turnId,{id:randomUUID(),at:new Date().toISOString(),graphHash:decisionHash(graph),...run});}
+    const routeFor=node=>node.inference||workflow.inference||{};
+    const groupFor=node=>JSON.stringify([node.agentId,node.revisionId,routeFor(node)]);
+    const evaluate=async args=>{const node=args.nodeId?validated.agents.find(n=>n.id===args.nodeId):validated.agents.find(n=>n.agentId===args.agentId&&n.revisionId===args.revisionId&&n.enabled!==false),key=groupFor(node);const ids=[...new Set(validated.agents.filter(n=>n.enabled!==false&&groupFor(n)===key).map(n=>n.questionId))];if(!grouped.has(key))grouped.set(key,runOne({...args,questionIds:ids,inference:routeFor(node),claim:value.claim,evidenceLines:value.evidenceLines}));return grouped.get(key);};
+    if(workflowRunner&&!validated.agents.some(n=>n.enabled===false||n.inference)){const run=await workflowRunner(workflow,value,evaluate,pinnedQuestion);return saveRun(workflow,value.sessionId,value.turnId,{id:randomUUID(),at:new Date().toISOString(),graphHash:decisionHash(graph),...run});}
     for(const node of validated.agents){
-      const result=await evaluate({sessionId:value.sessionId,turnId:value.turnId,scope:value.scope,agentId:node.agentId,revisionId:node.revisionId});
+      if(node.enabled===false){steps.push({nodeId:node.id,disabled:true,results:[]});continue;}
+      const result=await evaluate({nodeId:node.id,sessionId:value.sessionId,turnId:value.turnId,scope:value.scope,agentId:node.agentId,revisionId:node.revisionId});
       steps.push({nodeId:node.id,agentId:node.agentId,questionId:node.questionId,revisionId:node.revisionId,results:[result]});
       if(result.status!=='ok')return saveRun(workflow,value.sessionId,value.turnId,{id:randomUUID(),complete:false,steps,error:result.error,graphHash:decisionHash(graph)});
       answers[node.id]=result.rawResponse.answers?.[node.questionId];
@@ -157,30 +162,38 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
     }
     return {source:'frozen',labeled:rows.length,paired:gate.total,missing:rows.filter(row=>row.missing).length,uncertain:rows.filter(row=>row.uncertain).length,jointHoldout:rows.filter(row=>row.jointHoldout).length,baseline,gate,rows};
   }
-  async function runOne({ sessionId, turnId, scope = 'turn', agentId, revisionId, priorAnswers, claim, evidenceLines }) {
-    if (!['turn','messages','verification'].includes(scope)) throw fail(400, 'Choose messages or the full selected turn.');
+  async function runOne({ sessionId, turnId, scope = 'turn', agentId, revisionId, priorAnswers, claim, evidenceLines, questionIds, inference = {} }) {
+    if (!['turn','messages','verification','skill-verification','ui-requirements'].includes(scope)) throw fail(400, 'Choose messages or the full selected turn.');
     const turn = turnsFor(sessionId, sessionsDir).find(item => item.id === turnId);
     if (!turn || !turn.complete) throw fail(400, 'Select a completed turn.');
-    const { revision, questions } = latestRevision(agentId, revisionId);
+    const { revision, questions: allQuestions } = latestRevision(agentId, revisionId);
+    const questions=questionIds?Object.fromEntries(questionIds.map(id=>{if(!allQuestions[id])throw fail(400,'Unknown selected question.');return [id,allQuestions[id]];})):allQuestions;
+    if(!Object.keys(questions).length)throw fail(400,'No enabled checks.');
+    const target=inference.service==='typesafe'?'https://api.typesafe.ai/v1/systemone':inference.service==='openrouter'?'https://openrouter.ai/api/v1/systemone':endpoint;
+    const model=inference.model||'jev-latest';
+    if(!['jev-latest','jev-1.13.0','typesafe/jev-1.13','~typesafe/jev-latest'].includes(model))throw fail(400,'Select a supported System One model.');
+    if(target.includes('api.typesafe.ai')&&!['jev-latest','jev-1.13.0'].includes(model))throw fail(400,'Use a TypeSafe model ID for this service.');
     const included = turn.events.filter(item => item.kind === 'user' || item.kind === 'assistant' || (scope === 'turn' && ['tool','tool-result'].includes(item.kind)));
-    const packet=scope==='verification'?verificationPacket(turn,{claim,evidenceLines}):null;
+    const packet=scope==='ui-requirements'?requirementsPacket():scope==='skill-verification'?skillAuditPacket(turn,turnsFor(sessionId,sessionsDir),json(db.prepare("SELECT value FROM wb_results WHERE session_id=? AND json_extract(value,'$.scope')='verification' ORDER BY rowid DESC LIMIT 1").get(sessionId)),json(db.prepare("SELECT value FROM wb_workflow_runs WHERE session_id=? AND turn_id=? ORDER BY rowid DESC LIMIT 1").get(sessionId,turnId))):scope==='verification'?verificationPacket(turn,{claim,evidenceLines}):null;
+    if(scope==='ui-requirements'&&questionIds){for(const id of Object.keys(packet.state.requirements))if(!questionIds.includes(id)){delete packet.state.requirements[id];delete packet.state.repair_instructions[id];}packet.bytes=JSON.stringify(packet.state).length;}
     const state=packet?packet.state:included.map(item => `${item.kind}${item.name ? ` (${item.name})` : ''}: ${item.text}`).join('\n\n');
     const stateText=typeof state==='string'?state:JSON.stringify(state);
     if (!stateText || stateText.length > 32000) throw fail(400, 'Selected turn is empty or too long for Jev.');
-    const body = JSON.stringify({ model: 'jev-latest', state: priorAnswers && !packet ? `${state}\n\nPrevious workflow answers (unverified classifications, not ground truth): ${JSON.stringify(priorAnswers)}\nRe-evaluate the selected turn from its source evidence. A prior answer may be wrong; explain disagreement through the evidence.` : state, questions });
-    const inputHash = hash(body), at = new Date().toISOString(), started = Date.now();
-    const key = getKey(); if (!key) throw fail(401, 'Set a Jev key before running a classifier.');
+    const body = JSON.stringify({ model, state: priorAnswers && !packet ? `${state}\n\nPrevious workflow answers (unverified classifications, not ground truth): ${JSON.stringify(priorAnswers)}\nRe-evaluate the selected turn from its source evidence. A prior answer may be wrong; explain disagreement through the evidence.` : state, questions });
+    const inputHash = hash(target+'\n'+body), at = new Date().toISOString(), started = Date.now();
+    if(scope==='ui-requirements'){const cached=json(db.prepare("SELECT value FROM wb_results WHERE agent_id=? AND json_extract(value,'$.inputHash')=? AND json_extract(value,'$.status')='ok' ORDER BY rowid DESC LIMIT 1").get(agentId,inputHash));if(cached)return {...cached,verification:packet,reused:true,cachedAt:cached.at};}
+    const key=target.includes('openrouter.ai')?(store.setting('openrouterKey')||(target===endpoint?getKey():null)):target.includes('api.typesafe.ai')?(store.setting('typesafeKey')||(target===endpoint?getKey():null)):getKey();if(!key)throw fail(401,'Add a key for the selected service; keys are not shared across services.');
     let response, raw;
     try {
-      response = await upstreamFetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body, redirect: 'manual' });
+      response = await upstreamFetch(target, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body, redirect: 'manual' });
       raw = await response.json();
     } catch (error) { throw fail(502, `Jev request failed: ${error.message}`); }
     const elapsedMs = Date.now() - started;
     const callId = store.allocate();
-    const record = { id: randomUUID(), at, sessionId, turnId, agentId, revisionId: revision.id, scope, ...(packet?{verification:packet}:{}), stateHash: hash(stateText), inputHash, sourceHash: hash(revision.source), model: 'jev-latest', answeredBy: raw?.model || null, elapsedMs, usage: raw?.usage || null, questions, rawResponse: raw, callId, reviews: {}, status: response.ok && obj(raw?.answers) ? 'ok' : 'error', error: response.ok ? null : `Jev returned HTTP ${response.status}` };
+    const record = { id: randomUUID(), at, sessionId, turnId, agentId, revisionId: revision.id, scope, ...(packet?{verification:packet}:{}), stateHash: hash(stateText), inputHash, sourceHash: hash(revision.source), model, endpoint:target, answeredBy: raw?.model || null, elapsedMs, usage: raw?.usage || null, questions, rawResponse: raw, callId, reviews: {}, status: response.ok && obj(raw?.answers) ? 'ok' : 'error', error: response.ok ? null : `Jev returned HTTP ${response.status}` };
     db.prepare('INSERT INTO wb_results (id,session_id,turn_id,agent_id,revision_id,value) VALUES (?,?,?,?,?,?)').run(record.id, sessionId, turnId, agentId, revision.id, JSON.stringify(record));
     const requestValue = JSON.parse(body);
-    store.save({ summary: { id: callId, at, label: `observer/${agentId}`, trigger: null, key: inputHash, stateKey: hash(JSON.stringify(requestValue.state)), status: response.status, elapsedMs, bytes: Buffer.byteLength(body), model: 'jev-latest', answeredBy: record.answeredBy, inputTokens: raw?.usage?.input_tokens ?? null, cost: raw?.usage?.cost ?? null, questions: Object.entries(questions).map(([id,q]) => ({ id, type: q.type, asks: typeof q.instructions === 'string' ? q.instructions : JSON.stringify(q.instructions), ...(obj(raw?.answers?.[id]) ? raw.answers[id] : {}) })) }, request: requestValue, response: raw });
+    store.save({ summary: { id: callId, at, label: `observer/${agentId}`, trigger: null, key: inputHash, stateKey: hash(JSON.stringify(requestValue.state)), status: response.status, elapsedMs, bytes: Buffer.byteLength(body), model, answeredBy: record.answeredBy, inputTokens: raw?.usage?.input_tokens ?? null, cost: raw?.usage?.cost ?? null, questions: Object.entries(questions).map(([id,q]) => ({ id, type: q.type, asks: typeof q.instructions === 'string' ? q.instructions : JSON.stringify(q.instructions), ...(obj(raw?.answers?.[id]) ? raw.answers[id] : {}) })) }, request: requestValue, response: raw });
     return record;
   }
   const body = async req => {
@@ -196,9 +209,12 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
       if (req.method !== 'GET' && req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) throw fail(403, 'Only this viewer can change workbench data.');
       if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, 'Cross-site requests are blocked.');
       const path = url.pathname;
+      if(path==='/api/traffic'&&req.method==='GET')return reply(res,200,{enabled:store.setting('outboundEnabled')!=='false',endpoint,model:'jev-latest',events:JSON.parse(store.setting('trafficEvents')||'[]'),scope:'Requests through this application server only; not Codex or other apps.'});
+      if(path==='/api/traffic'&&req.method==='POST'){const v=await body(req);if(typeof v.enabled!=='boolean')throw fail(400,'Set enabled true or false.');store.setSetting('outboundEnabled',String(v.enabled));return reply(res,200,{enabled:v.enabled});}
+      if(path==='/api/service-key'&&req.method==='POST'){const v=await body(req);if(!['typesafe','openrouter'].includes(v.service)||typeof v.key!=='string'||!v.key.trim()||v.key.length>4096)throw fail(400,'Choose a service and enter its key.');store.setSetting(v.service+'Key',v.key.trim());return reply(res,200,{set:true});}
       if (path === '/api/runtime' && req.method === 'GET') return reply(res,200,{workflow:workflowRunner?'langgraph':'builtin',discussion:discussionRunner?'langchain':'builtin',automaticModelRuns:false});
       if (path === '/api/history/sessions' && req.method === 'GET') return reply(res,200,{ sessions: findSessions({dir:sessionsDir,limit:40}).filter(item=>item.id).map(item=>({id:item.id,label:item.id,at:new Date(item.mtime).toISOString()})) });
-      if(path === '/api/verification/pack' && req.method === 'POST'){const value=await body(req),turn=turnsFor(value.sessionId,sessionsDir).find(item=>item.id===value.turnId);if(!turn||!turn.complete)throw fail(400,'Select a completed turn.');return reply(res,200,verificationPacket(turn,value));}
+      if(path === '/api/verification/pack' && req.method === 'POST'){const value=await body(req),turn=turnsFor(value.sessionId,sessionsDir).find(item=>item.id===value.turnId);if(!turn||!turn.complete)throw fail(400,'Select a completed turn.');return reply(res,200,value.mode==='ui-requirements'?requirementsPacket():value.mode==='typesafe-skill'?skillAuditPacket(turn,turnsFor(value.sessionId,sessionsDir),json(db.prepare("SELECT value FROM wb_results WHERE session_id=? AND json_extract(value,'$.scope')='verification' ORDER BY rowid DESC LIMIT 1").get(value.sessionId)),json(db.prepare("SELECT value FROM wb_workflow_runs WHERE session_id=? AND turn_id=? ORDER BY rowid DESC LIMIT 1").get(value.sessionId,value.turnId))):verificationPacket(turn,value));}
       if (path === '/api/history/turns' && req.method === 'GET') return reply(res,200,{ turns: turnsFor(url.searchParams.get('session'),sessionsDir) });
       if (path === '/api/agents/validate' && req.method === 'POST') return reply(res,200,{ questions: questionsFrom((await body(req)).source) });
       const templateCheck = /^\/api\/agents\/([0-9a-f-]+)\/check$/.exec(path);
@@ -353,7 +369,7 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
           if(!Array.isArray(value.steps)||!value.steps.length||value.steps.length>20)throw fail(400,'Add 1–20 classifier steps.');
           for(const step of value.steps)latestRevision(step.agentId,step.revisionId);
         }
-        const id = value.id || randomUUID(), saved = value.graph?{id,name:value.name.trim(),graph:value.graph,positions:obj(value.positions)?value.positions:{}}:{id,name:value.name.trim(),steps:value.steps,positions:obj(value.positions)?value.positions:{}};
+        const id = value.id || randomUUID(), saved = value.graph?{id,name:value.name.trim(),graph:value.graph,positions:obj(value.positions)?value.positions:{},...(obj(value.inference)?{inference:value.inference}:{})}:{id,name:value.name.trim(),steps:value.steps,positions:obj(value.positions)?value.positions:{}};
         db.prepare('INSERT INTO wb_workflows(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(id,JSON.stringify(saved));
         return reply(res,200,saved);
       }
