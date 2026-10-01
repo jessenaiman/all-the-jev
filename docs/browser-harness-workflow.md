@@ -1,3 +1,75 @@
+# Browser Harness and Jev in the existing Workflow editor
+
+## Task list
+
+- [x] Read current TypeSafe API, function-calling, parallel-questions and citation-check cookbooks.
+- [x] Put the installed Ultrafast policy and Browser Harness executor behind controls in the existing Workflow inspector.
+- [x] Group saved workflows by their execution purpose using cookbook categories. No empty recipe is advertised as a runnable saved workflow.
+- [ ] Observe the editor, preview its actual state, obtain one native Jev operation/target choice and execute it in Chrome.
+- [ ] Review the observed outcome against the goal; add the specific failed step to the next task.
+
+The inspector displays the five browser steps as they progress. API pause and browser permission still gate live execution. No classifier answer or source check substitutes for a browser observation.
+
+## Jev Ultrafast controls
+
+The Workflow toolbar has a **Jev browser tools** icon. The same controls are under **View → Jev browser tools** and the inspector's **Browser** tab. The editor's graph stays in place.
+
+```mermaid
+flowchart TD
+    UI["You: existing Workflow page · 127.0.0.1:4781
+ui/workflow-browser.js: step()"]
+    API["Node: src/workbench.js
+POST /api/browser/jev"]
+    WORKER["src/jev-browser.js: createJevBrowser().call()
+Installed .venv Python → scripts/jev-browser.py"]
+    CHROME["Browser Harness: list_tabs + CDP
+Reuse existing daemon and selected Chrome tab
+No new tab, auto-reconnect, screenshots or recordings"]
+    OBSERVE["Jev Ultrafast Browser.observe()
+Atomic indexed DOM snapshot"]
+    PREVIEW["Jev Ultrafast model.choose()
+Intercept HTTP to preview state + Choice questions locally"]
+    JEV["You: Send preview to Jev
+Node uses saved workflow service/model
+Default OpenRouter /api/v1/systemone
+TypeSafe direct /v1/systemone optional"]
+    GATE{"Operation + matching target valid?
+Both confidences ≥ 0.80?"}
+    HOLD["Local hold: paused API, stale state, invalid response,
+low confidence, DONE or BLOCKED"]
+    ACTION["You: Execute selected action
+Jev Ultrafast Browser.act()
+Recheck actual DOM identity, freshness and occlusion"]
+    NEXT["Browser.observe() after execution
+Show operation, target, raw answers and observed change"]
+    CODER["Unimplemented: automatic coding-agent repair dispatch
+Jev does not write code"]
+    UI --> API --> WORKER --> CHROME
+    CHROME -- Live connection succeeds --> OBSERVE --> PREVIEW
+    CHROME -- Missing/stale daemon --> HOLD
+    PREVIEW -- Explicit request; API traffic enabled --> JEV --> GATE
+    GATE -- No --> HOLD
+    GATE -- Yes; explicit execution --> ACTION --> NEXT
+    ACTION -- Stale or covered target --> HOLD
+    NEXT -. Repair needs a coding agent .-> CODER
+```
+
+| Piece | Actual code, package or URL |
+| --- | --- |
+| Inspector controls | [ui/workflow-browser.js](../ui/workflow-browser.js), opened by [ui/workflow-studio.js](../ui/workflow-studio.js). Observe, Preview, Send and Execute are separate steps. |
+| Local endpoint | [src/workbench.js](../src/workbench.js): `POST /api/browser/jev`, commands `tabs`, `observe`, `preview`, `choose`, `execute`. Workflow ID binds the observation and preview; changing service/model requires another preview. |
+| Persistent worker | [src/jev-browser.js](../src/jev-browser.js): `<JEV_ULTRAFAST_DIR>/.venv/Scripts/python.exe -u scripts/jev-browser.py <JEV_ULTRAFAST_DIR>` on Windows. Existing installation defaults to `C:/sites/jev-ultrafast`; override with `JEV_ULTRAFAST_DIR`. |
+| Actual browser policy/executor | [scripts/jev-browser.py](../scripts/jev-browser.py) imports the installed [Jev Ultrafast `model.choose()` and `Browser`](https://github.com/browser-use/jev-ultrafast). The adapter attaches to an existing tab instead of the upstream demo's new tab. |
+| Browser transport | Installed Browser Harness **0.1.13** in the existing Ultrafast environment. [Install and connection documentation](https://github.com/browser-use/browser-harness/blob/main/install.md). `browser-harness --doctor` diagnoses missing connections; this worker does not restart the daemon. |
+| Model request | Node owns credentials and uses the existing traffic pause/ledger. [TypeSafe HTTP API](https://docs.typesafe.ai/api), [speculative fan-out](https://docs.typesafe.ai/patterns/fan-out). Operation and compatible target heads share one observed state, and only the matching target can execute. |
+| Services | Configured gateway by default; `https://openrouter.ai/api/v1/systemone` or `https://api.typesafe.ai/v1/systemone` selected through the saved workflow. No direct Python model requests. |
+| Text input | User supplies the text when Jev selects TYPE_TEXT. The adapter does not call an additional text model. |
+| Recording and limits | Screenshots and Browser Harness recordings off. Execution history stays in worker memory; normal gateway request/answer records remain available. One step per user action, 20-action budget, 32,000-character preview budget, no automatic paid loop. DONE alone never confirms a repair. |
+
+**Verification status, 30 September 2026:** the installed library imports and the JavaScript/Python syntax and Node typecheck pass. Codex's saved browser permission denies `http://127.0.0.1:4781`, so the restored inspector, Chrome observation, Jev decision and browser execution have **not been verified live**. No new Jev request was made for this change. The existing traffic pause is preserved.
+
+## Earlier authored tool-routing integration
+
 # Browser Harness route: code, agents, packages, and endpoints
 
 This describes the implementation served from `C:\Users\jesse\.codex\worktrees\2563\jeview` at http://127.0.0.1:4781/. The root checkout `C:\sites\jeview` has different code. Source links below point to the running worktree.

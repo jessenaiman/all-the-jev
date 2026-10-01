@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { findSessions, findSession, readSession, toEvents } from '../scripts/sim/chatlog.js';
 import { validateGraph, projectGraph, evaluateGraph } from './gate-workflow.js';
 import { createBrowserHarness } from './browser-harness.js';
+import { createJevBrowser } from './jev-browser.js';
 import { compileToolInstructionWorkflow, resolveToolInstruction } from './tool-instruction-workflow.ts';
 
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -64,6 +65,8 @@ function turnsFor(sessionId, sessionsDir) {
 
 export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, chatKey, chatModel, store, sessionsDir, workflowRunner, discussionRunner, browserHarness=createBrowserHarness() }) {
   const db = new DatabaseSync(database);
+  const jevBrowser=createJevBrowser();
+  let browserWorkflow=null,browserPreview=null;
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;
     CREATE TABLE IF NOT EXISTS wb_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS wb_revisions (agent_id TEXT NOT NULL, id INTEGER NOT NULL, source TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(agent_id,id));
@@ -457,6 +460,33 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
         if(typeof browserHarness.listTools!=='function')throw fail(503,'Browser Harness tool discovery is unavailable.');
         return reply(res,200,{tools:await browserHarness.listTools()});
       }
+      if(path==='/api/browser/jev'&&req.method==='POST'){
+        const value=await body(req);
+        if(!['tabs','observe','preview','choose','execute'].includes(value.command))throw fail(400,'Choose a supported browser step.');
+        const workflow=readWorkflow(value.workflowId),inference=workflow.inference||{};
+        if(!['tabs','observe'].includes(value.command)&&browserWorkflow!==workflow.id)throw fail(409,'Observe a tab for this workflow first.');
+        const target=inference.service==='typesafe'?'https://api.typesafe.ai/v1/systemone':inference.service==='openrouter'?'https://openrouter.ai/api/v1/systemone':endpoint;
+        const model=inference.model||'jev-latest';
+        if(!['jev-latest','jev-1.13.0','typesafe/jev-1.13','~typesafe/jev-latest'].includes(model))throw fail(400,'Select a supported System One model.');
+        if(target.includes('api.typesafe.ai')&&!['jev-latest','jev-1.13.0'].includes(model))throw fail(400,'Use a TypeSafe model ID for this service.');
+        if(value.command==='choose'&&browserPreview!==JSON.stringify([workflow.id,target,model]))throw fail(409,'Preview again after changing the workflow, service or model.');
+        if(value.command==='choose'&&store.setting('outboundEnabled')==='false')throw fail(409,'API traffic is paused. Preview stays local; enable traffic to ask Jev.');
+        let callId=null;
+        const result=await jevBrowser.call(value.command,{targetId:value.targetId,goal:value.goal,fingerprint:value.fingerprint,text:value.text,model},async request=>{
+          const key=target.includes('openrouter.ai')?(store.setting('openrouterKey')||(target===endpoint?getKey():null)):target.includes('api.typesafe.ai')?(store.setting('typesafeKey')||(target===endpoint?getKey():null)):getKey();
+          if(!key)throw fail(401,'Add a key for the selected service; keys are not shared across services.');
+          const outbound=JSON.stringify({...request,model}),at=new Date().toISOString(),started=Date.now();
+          const response=await upstreamFetch(target,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${key}`},body:outbound,redirect:'manual'}),raw=await response.json();
+          callId=store.allocate();
+          store.save({summary:{id:callId,at,label:`browser-jev/${workflow.id}`,trigger:null,key:hash(outbound),stateKey:hash(JSON.stringify(request.state)),status:response.status,elapsedMs:Date.now()-started,bytes:Buffer.byteLength(outbound),model,answeredBy:raw?.model||null,inputTokens:raw?.usage?.input_tokens??null,cost:raw?.usage?.cost??null,questions:Object.entries(request.questions).map(([id,q])=>({id,type:q.type,asks:JSON.stringify(q.instructions),...(raw?.answers?.[id]||{})}))},request:JSON.parse(outbound),response:raw});
+          if(!response.ok)throw fail(response.status,`Jev returned HTTP ${response.status}`);
+          return raw;
+        });
+        if(value.command==='observe'){browserWorkflow=workflow.id;browserPreview=null;}
+        if(value.command==='preview')browserPreview=JSON.stringify([workflow.id,target,model]);
+        if(value.command==='execute')browserPreview=null;
+        return reply(res,200,{...result,callId,endpoint:target,model});
+      }
       if (path === '/api/discuss' && req.method === 'POST') {
         const value=await body(req);
         if(typeof value.prompt!=='string'||!value.prompt.trim()||value.prompt.length>4000)throw fail(400,'Write a question up to 4,000 characters.');
@@ -480,5 +510,5 @@ export function createWorkbenchApi({ database, endpoint, upstreamFetch, getKey, 
       return reply(res,404,{error:'Not found'});
     } catch (error) { return reply(res,error.status || 500,{error:error.message}); }
   }
-  return {handle,close:()=>{browserHarness.close();db.close();}};
+  return {handle,close:()=>{browserHarness.close();jevBrowser.close();db.close();}};
 }
